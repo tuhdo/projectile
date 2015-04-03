@@ -543,13 +543,11 @@ The cache is created both in memory and on the hard drive."
   "Check if FILE is already in PROJECT cache."
   (member file (gethash project projectile-projects-cache)))
 
-;;;###autoload
-(defun projectile-cache-current-file ()
-  "Add the currently visited file to the cache."
+(defun projectile-cache-file (abs-current-file)
+  "Add a file with absolute path to the cache."
   (interactive)
   (let* ((current-project (projectile-project-root))
-         (abs-current-file (buffer-file-name (current-buffer)))
-         (current-file (file-relative-name abs-current-file current-project)))
+         (current-file (file-relative-name file current-project)))
     (when (gethash (projectile-project-root) projectile-projects-cache)
       (unless (or (projectile-file-cached-p current-file current-project)
                   (projectile-ignored-directory-p (file-name-directory abs-current-file))
@@ -561,6 +559,13 @@ The cache is created both in memory and on the hard drive."
         (message "File %s added to project %s cache."
                  (propertize current-file 'face 'font-lock-keyword-face)
                  (propertize current-project 'face 'font-lock-keyword-face))))))
+
+;;;###autoload
+(defun projectile-cache-current-file ()
+  "Add the currently visited file to the cache."
+  (interactive)
+  (let* ((abs-current-file (buffer-file-name (current-buffer))))
+    (projectile-cache-file abs-current-file)))
 
 ;; cache opened files automatically to reduce the need for cache invalidation
 (defun projectile-cache-files-find-file-hook ()
@@ -592,6 +597,42 @@ The cache is created both in memory and on the hard drive."
              (relative-filename (file-relative-name true-filename project-root)))
         (if (projectile-file-cached-p relative-filename project-root)
             (projectile-purge-file-from-cache relative-filename)))))
+
+
+;;; File notification
+(defmacro projectile-get-event-descriptor (event)
+  `(car event))
+
+(defmacro projectile-get-event-type (event)
+  `(cadr event))
+
+(defmacro projectile-get-event-file (event)
+  `(caddr event))
+
+(defun projectile-file-handler (event)
+  (let ((event-type (projectile-get-event-type event))
+        (event-file (projectile-get-event-file event)))
+    (cond
+     ((eq event-type 'created)
+      (if (file-directory-p event-file)
+          (file-notify-add-watch event-file
+                                 '(change)
+                                 'projectile-file-handler)
+        (message "Add file %s to cache" event-file)
+        (projectile-cache-file event-file)))
+     ((eq event-type 'deleted)
+      (if (file-directory-p event-file)
+          (file-notify-rm-watch (projectile-get-event-descriptor event))
+        (message "Remove file %s to cache" event-file)
+        (projectile-purge-file-from-cache event-file)))
+     (t))))
+
+(defun projectile-enable-file-notification ()
+  (when (equal (file-truename default-directory) (projectile-project-root))
+    (mapc (lambda (d)
+        (file-notify-add-watch
+         d '(change) 'projectile-file-handler))
+          (projectile-current-project-dirs))))
 
 
 ;;; Project root related utilities
